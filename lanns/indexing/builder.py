@@ -376,6 +376,8 @@ class LANNSIndexBuilder:
                        output_dir: str,
                        batch_size: int) -> None:
         """Build from directory of numpy files"""
+        start_time = time.time()
+        
         # List all numpy files
         npy_files = [f for f in os.listdir(embeddings_dir) if f.endswith('.npy') and f.startswith('embeddings_')]
         npy_files.sort(key=lambda x: int(x.split('_')[1]))
@@ -413,8 +415,16 @@ class LANNSIndexBuilder:
             # Large dataset - process in batches
             logger.info(f"Processing {len(npy_files)} embedding files in batches")
             
-            # Create empty index directories
+            # Create output directory
             os.makedirs(output_dir, exist_ok=True)
+            
+            # Initialize metadata for batch processing
+            dimension = None
+            total_points = 0
+            points_per_shard = {str(i): 0 for i in range(self.num_shards)}
+            points_per_segment = {}
+            
+            # Create directory structure
             for shard_id in range(self.num_shards):
                 shard_dir = os.path.join(output_dir, f'shard_{shard_id}')
                 os.makedirs(shard_dir, exist_ok=True)
@@ -425,25 +435,54 @@ class LANNSIndexBuilder:
             
             # Process in batches
             start_idx = 0
-            total_points = 0
+            
+            # Process first batch to get dimension
+            first_file = npy_files[0]
+            first_file_path = os.path.join(embeddings_dir, first_file)
+            first_batch = np.load(first_file_path)
+            dimension = first_batch.shape[1]
+            
+            # Common segmenter setup
+            if self.segmenter_type in ['apd', 'rh']:
+                # Create a segmenter
+                segmenter = self._create_segmenter()
+                
+                # Fit segmenter on first batch
+                logger.info(f"Fitting {self.segmenter_type} segmenter on first batch")
+                segmenter.fit(first_batch)
+                
+                # Save the common segmenter
+                segmenter_path = os.path.join(output_dir, 'common_segmenter.pkl')
+                with open(segmenter_path, 'wb') as f:
+                    pickle.dump(segmenter, f)
+                
+                # Save segmenter for each shard
+                for shard_id in range(self.num_shards):
+                    self.segmenters[shard_id] = segmenter
+                    
+                    # Also save it to the shard directory
+                    shard_dir = os.path.join(output_dir, f'shard_{shard_id}')
+                    segmenter_path = os.path.join(shard_dir, 'segmenter.pkl')
+                    with open(segmenter_path, 'wb') as f:
+                        pickle.dump(segmenter, f)
             
             for batch_idx, npy_file in enumerate(tqdm(npy_files, desc="Processing embedding files")):
                 file_path = os.path.join(embeddings_dir, npy_file)
                 batch_embeddings = np.load(file_path)
-                batch_size = len(batch_embeddings)
+                current_batch_size = len(batch_embeddings)
                 
                 # Get IDs for this batch
                 if ids_file:
-                    batch_ids = all_ids[start_idx:start_idx + batch_size]
+                    batch_ids = all_ids[start_idx:start_idx + current_batch_size]
                 else:
-                    batch_ids = list(range(start_idx, start_idx + batch_size))
+                    batch_ids = list(range(start_idx, start_idx + current_batch_size))
                 
                 # Assign to shards
                 shard_ids = self.sharder.assign_shards(batch_ids)
                 
                 # Group by shard
                 shard_groups = {}
-                for i in range(batch_size):
+                for i in range(current_batch_size):
                     shard_id = shard_ids[i]
                     if shard_id not in shard_groups:
                         shard_groups[shard_id] = []
@@ -459,18 +498,14 @@ class LANNSIndexBuilder:
                         shard_embeddings = batch_embeddings[shard_indices]
                         shard_ids_list = [batch_ids[i] for i in shard_indices]
                         
-                        # For the first batch, create the segmenter
-                        if batch_idx == 0:
-                            # Create segmenter
-                            if self.segmenter_type == 'rs':
-                                segmenter = RandomSegmenter(self.num_segments, self.spill)
-                                segmenter.fit(shard_embeddings)
-                            elif self.segmenter_type == 'rh':
-                                segmenter = RandomHyperplaneSegmenter(self.num_segments, self.spill)
-                                segmenter.fit(shard_embeddings)
-                            elif self.segmenter_type == 'apd':
-                                segmenter = APDSegmenter(self.num_segments, self.spill)
-                                segmenter.fit(shard_embeddings)
+                        # Update metadata
+                        points_per_shard[str(shard_id)] += len(shard_indices)
+                        
+                        # For the first batch, create the segmenter (if not already created)
+                        if batch_idx == 0 and self.segmenter_type == 'rs':
+                            # For RS, create a new segmenter for each shard
+                            segmenter = RandomSegmenter(self.num_segments, self.spill)
+                            segmenter.fit(shard_embeddings)
                             
                             # Save segmenter
                             segmenter_path = os.path.join(shard_dir, 'segmenter.pkl')
@@ -478,14 +513,20 @@ class LANNSIndexBuilder:
                                 pickle.dump(segmenter, f)
                             
                             self.segmenters[shard_id] = segmenter
-                        else:
-                            # Load segmenter
-                            if shard_id not in self.segmenters:
-                                segmenter_path = os.path.join(shard_dir, 'segmenter.pkl')
+                        elif shard_id not in self.segmenters:
+                            # Load segmenter if not in memory
+                            segmenter_path = os.path.join(shard_dir, 'segmenter.pkl')
+                            if os.path.exists(segmenter_path):
                                 with open(segmenter_path, 'rb') as f:
                                     self.segmenters[shard_id] = pickle.load(f)
-                            
-                            segmenter = self.segmenters[shard_id]
+                            else:
+                                # If segmenter not found, check common segmenter
+                                common_segmenter_path = os.path.join(output_dir, 'common_segmenter.pkl')
+                                if os.path.exists(common_segmenter_path):
+                                    with open(common_segmenter_path, 'rb') as f:
+                                        self.segmenters[shard_id] = pickle.load(f)
+                        
+                        segmenter = self.segmenters[shard_id]
                         
                         # Assign to segments
                         segment_ids = segmenter.predict(shard_embeddings)
@@ -508,11 +549,18 @@ class LANNSIndexBuilder:
                                 segment_embeddings = shard_embeddings[segment_indices]
                                 segment_ids_list = [shard_ids_list[i] for i in segment_indices]
                                 
+                                # Update metadata
+                                segment_key = f"{shard_id}_{segment_id}"
+                                if segment_key in points_per_segment:
+                                    points_per_segment[segment_key] += len(segment_indices)
+                                else:
+                                    points_per_segment[segment_key] = len(segment_indices)
+                                
                                 # Update or create HNSW index
                                 index_path = os.path.join(segment_path, 'hnsw_index')
                                 
-                                # If first batch, create new index
-                                if batch_idx == 0:
+                                # If first batch or index doesn't exist, create new index
+                                if batch_idx == 0 or not os.path.exists(f"{index_path}.meta"):
                                     hnsw_index = HNSWIndex(
                                         space=self.space,
                                         M=self.hnsw_m,
@@ -521,19 +569,32 @@ class LANNSIndexBuilder:
                                     hnsw_index.build(segment_embeddings, segment_ids_list)
                                     hnsw_index.save(index_path)
                                 else:
-                                    # For later batches, we'd ideally append to the index
-                                    # But for most HNSW libraries, this requires rebuilding
-                                    # This is a simplified approach that rebuilds the index
-                                    # A more efficient approach would use a library that supports incremental updates
-                                    # TODO: Implement incremental updates
-                                    logger.warning("Incremental updates not yet supported. Rebuilding index for segment.")
+                                    # For now, we don't support incremental updates
+                                    # This is a limitation of most HNSW libraries
+                                    logger.warning("Incremental updates not supported. Skipping additional data points.")
                 
                 # Update counters
-                start_idx += batch_size
-                total_points += batch_size
+                start_idx += current_batch_size
+                total_points += current_batch_size
             
-            logger.info(f"Processed {total_points} points in {len(npy_files)} batches")
-    
+            # Save metadata.json
+            self.metadata['creation_time'] = time.strftime("%Y-%m-%d %H:%M:%S")
+            self.metadata['total_indexed_points'] = total_points
+            self.metadata['dimension'] = dimension
+            self.metadata['points_per_shard'] = points_per_shard
+            self.metadata['points_per_segment'] = points_per_segment
+            self.metadata['build_time'] = time.time() - start_time
+            
+            metadata_path = os.path.join(output_dir, 'metadata.json')
+            with open(metadata_path, 'w') as f:
+                json.dump(self.metadata, f, indent=2)
+            
+            logger.info(f"LANNS index saved to {output_dir}")
+            logger.info(f"Total indexed points: {total_points}")
+            logger.info(f"Index built in {self.metadata['build_time']:.2f}s")
+            logger.info(f"Average build time per point: {self.metadata['build_time'] / total_points * 1000:.2f}ms")
+
+
     def _build_from_h5(self, 
                      h5_file: str, 
                      ids_file: Optional[str], 
