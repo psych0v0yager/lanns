@@ -26,7 +26,7 @@ LANNS is a scalable system for approximate nearest neighbor search that can effi
 ```bash
 # Clone the repository
 git clone https://github.com/psych0v0yager/lanns.git
-cd LANNS_Implementation
+cd lanns
 
 # Install dependencies
 pip install -r requirements.txt
