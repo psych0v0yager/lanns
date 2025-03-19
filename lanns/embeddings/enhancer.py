@@ -45,7 +45,9 @@ class VLLMEnhancer:
         # Set default prompt template if not provided
         if prompt_template is None:
             self.prompt_template = (
-                "You are an AI assistant that creates detailed profiles from data. "
+                "Given the following user data, I would like you to psychoanalyze this person. "
+                "Build a psychological profile of this user." 
+                "Really try to get into their thought patterns."
                 "Given the following data fields for an entity, create a comprehensive "
                 "profile that captures the essential characteristics in natural language. "
                 "Focus on creating a rich description that would be useful for semantic "

@@ -36,7 +36,7 @@ pip install -r requirements.txt
 pip install -e .
 
 # For enhanced embeddings support (optional)
-pip install "vllm>=0.2.0" "torch>=2.0.0"
+pip install "vllm>=0.7.3" "torch>=2.0.0"
 # Or simply:
 pip install -e ".[enhanced]"
 
@@ -79,7 +79,7 @@ With enhanced embeddings (requires vLLM):
 python run_pipeline.py --data_file /path/to/your/data.ndjson \
     --output_dir ./lanns_project \
     --use_enhanced_embeddings \
-    --llm_model meta-llama/Llama-2-7b-chat-hf \
+    --llm_model mistralai/Mistral-Small-3.1-24B-Instruct-2503 \
     --num_shards 2 \
     --num_segments 16
 ```
@@ -104,7 +104,7 @@ python generate_embeddings.py --data_path /path/to/data.ndjson \
 python generate_embeddings.py --data_path /path/to/data.ndjson \
     --output_dir ./embeddings \
     --use_enhanced_embeddings \
-    --llm_model meta-llama/Llama-2-7b-chat-hf
+    --llm_model mistralai/Mistral-Small-3.1-24B-Instruct-2503
 ```
 
 ### Building an Index
@@ -177,7 +177,7 @@ python evaluate.py --embeddings_file all_embeddings.npy --query_file query_embed
 - For best embedding quality:
   - model_name: 'Snowflake/snowflake-arctic-embed-l-v2.0'
   - use_enhanced_embeddings: True
-  - llm_model: 'meta-llama/Llama-2-7b-chat-hf'
+  - llm_model: 'mistralai/Mistral-Small-3.1-24B-Instruct-2503f'
 
 ## Python API
 
@@ -219,7 +219,7 @@ import numpy as np
 
 # Initialize enhancer
 enhancer = VLLMEnhancer(
-    model_name='meta-llama/Llama-2-7b-chat-hf',
+    model_name='mistralai/Mistral-Small-3.1-24B-Instruct-2503',
     cache_dir='./profiles_cache',
     output_dir='./enhanced_profiles'
 )
