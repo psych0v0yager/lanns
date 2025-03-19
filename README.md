@@ -20,6 +20,9 @@ LANNS is a scalable system for approximate nearest neighbor search that can effi
 - High recall (95%+ for most configurations)
 - Flexible segmentation strategies
 - Built on the state-of-the-art HNSW algorithm
+- **NEW**: Integrated embedding generation from raw data
+- **NEW**: Optional smart embeddings enhancement (requires vLLM)
+- **NEW**: End-to-end pipeline from raw data to queryable index
 
 ## Installation
 
@@ -28,11 +31,17 @@ LANNS is a scalable system for approximate nearest neighbor search that can effi
 git clone https://github.com/psych0v0yager/lanns.git
 cd lanns
 
-# Install dependencies
+# Basic installation
 pip install -r requirements.txt
-
-# Install the package
 pip install -e .
+
+# For enhanced embeddings support (optional)
+pip install "vllm>=0.2.0" "torch>=2.0.0"
+# Or simply:
+pip install -e ".[enhanced]"
+
+# To install everything
+pip install -e ".[all]"
 ```
 
 ## Dependencies
@@ -42,12 +51,61 @@ pip install -e .
 - h5py
 - tqdm
 - matplotlib (for evaluation plots)
+- sentence-transformers (for embedding generation)
 - One of the following HNSW libraries:
   - nmslib (recommended)
   - hnswlib
   - faiss
+- vLLM (optional, for enhanced embeddings)
 
 ## Usage
+
+### Complete Pipeline
+
+For an end-to-end workflow from raw data to queryable index:
+
+```bash
+python run_pipeline.py --data_file /path/to/your/data.ndjson \
+    --output_dir ./lanns_project \
+    --num_shards 2 \
+    --num_segments 16 \
+    --segmenter apd \
+    --create_query_samples
+```
+
+With enhanced embeddings (requires vLLM):
+
+```bash
+python run_pipeline.py --data_file /path/to/your/data.ndjson \
+    --output_dir ./lanns_project \
+    --use_enhanced_embeddings \
+    --llm_model meta-llama/Llama-2-7b-chat-hf \
+    --num_shards 2 \
+    --num_segments 16
+```
+
+### Generating Embeddings
+
+Generate embeddings from raw data:
+
+```bash
+# From NDJSON data
+python generate_embeddings.py --data_path /path/to/data.ndjson \
+    --output_dir ./embeddings \
+    --model_name Snowflake/snowflake-arctic-embed-l-v2.0 \
+    --batch_size 1024
+
+# With MRL dimensionality reduction
+python generate_embeddings.py --data_path /path/to/data.ndjson \
+    --output_dir ./embeddings \
+    --use_mrl --mrl_dimensions 256
+
+# With enhanced embeddings (requires vLLM)
+python generate_embeddings.py --data_path /path/to/data.ndjson \
+    --output_dir ./embeddings \
+    --use_enhanced_embeddings \
+    --llm_model meta-llama/Llama-2-7b-chat-hf
+```
 
 ### Building an Index
 
@@ -93,6 +151,15 @@ python evaluate.py --embeddings_file all_embeddings.npy --query_file query_embed
 - **hnsw_ef_construction**: HNSW parameter for index building
 - **hnsw_ef_search**: HNSW parameter for search
 
+#### Embedding Generation Parameters
+
+- **model_name**: Name of the sentence-transformer model to use
+- **batch_size**: Batch size for embedding generation
+- **use_mrl**: Apply dimensionality reduction
+- **mrl_dimensions**: Number of dimensions to keep when using MRL
+- **use_enhanced_embeddings**: Enable enhanced embeddings using vLLM
+- **llm_model**: vLLM model to use for profile enhancement
+
 ### Recommended Configurations
 
 - For maximum recall (95%+):
@@ -107,7 +174,71 @@ python evaluate.py --embeddings_file all_embeddings.npy --query_file query_embed
   - hnsw_ef_construction: 100
   - hnsw_ef_search: 50
 
+- For best embedding quality:
+  - model_name: 'Snowflake/snowflake-arctic-embed-l-v2.0'
+  - use_enhanced_embeddings: True
+  - llm_model: 'meta-llama/Llama-2-7b-chat-hf'
+
 ## Python API
+
+### Generating Embeddings
+
+```python
+from lanns.embeddings.generator import EmbeddingGenerator
+from lanns.embeddings.processor import get_processor
+
+# Initialize processor
+processor = get_processor(
+    file_path='/path/to/data.ndjson',
+    batch_size=1024,
+    text_field='description'  # optional
+)
+
+# Initialize embedding generator
+generator = EmbeddingGenerator(
+    model_name='Snowflake/snowflake-arctic-embed-l-v2.0',
+    batch_size=1024,
+    output_dir='./embeddings',
+    use_mrl=True,
+    mrl_dimensions=256
+)
+
+# Process with checkpointing
+generator.process_with_checkpointing(
+    processor,
+    checkpoint_file='./checkpoint.json',
+    checkpoint_frequency=100
+)
+```
+
+### Enhanced Embeddings (Optional)
+
+```python
+from lanns.embeddings import VLLMEnhancer, combine_embeddings
+import numpy as np
+
+# Initialize enhancer
+enhancer = VLLMEnhancer(
+    model_name='meta-llama/Llama-2-7b-chat-hf',
+    cache_dir='./profiles_cache',
+    output_dir='./enhanced_profiles'
+)
+
+# Generate enhanced profiles
+profiles = enhancer.generate_enhanced_profiles(data_list, ids=ids)
+
+# Generate embeddings for profiles
+profile_embeddings = generator.generate(profiles)
+
+# Combine with raw embeddings
+raw_embeddings = np.load('raw_embeddings.npy')
+combined = combine_embeddings(
+    raw_embeddings, 
+    profile_embeddings,
+    method='weighted_average',
+    raw_weight=0.7
+)
+```
 
 ### Building an Index
 
@@ -154,6 +285,10 @@ ids_list, distances_list = index.batch_query(query_embeddings, k=10)
 2. The system automatically uses the first available HNSW library in the order listed above.
 
 3. For very large datasets, the system can process data in batches to manage memory usage.
+
+4. Enhanced embeddings require vLLM, which needs a CUDA-capable GPU. If vLLM is not available, the system will fall back to standard embeddings.
+
+5. For checkpointing support, the embedding generator saves progress periodically. You can resume processing from a checkpoint if interrupted.
 
 ## Citation
 

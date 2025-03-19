@@ -1,10 +1,17 @@
+# Core requirements
 numpy>=1.20.0
 scipy>=1.7.0
 h5py>=3.1.0
 tqdm>=4.62.0
 matplotlib>=3.4.0
+sentence-transformers>=2.2.0  # Required for embedding generation
+
+# HNSW backend options (at least one is required)
 nmslib>=2.1.0; python_version >= "3.7"
 # If nmslib fails, try one of these alternatives:
 # hnswlib>=0.6.0
 # faiss-cpu>=1.7.0
-sentence-transformers>=2.2.0
+
+# Optional: Enhanced embedding support
+# vllm>=0.7.0; python_version >= "3.8"  # Uncomment to enable enhanced embeddings with vLLM
+# torch>=2.0.0  # Required for vLLM
