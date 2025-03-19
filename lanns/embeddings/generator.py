@@ -60,7 +60,11 @@ class EmbeddingGenerator:
             logger.info(f"Loading model: {model_name} on {self.device}")
             
             start_load = time.time()
-            self.model = SentenceTransformer(model_name, device=self.device)
+            if self.use_mrl:
+                self.model = SentenceTransformer(model_name, device=self.device, truncate_dim=self.mrl_dimensions)
+                logger.info(f"Applied MRL, reduced dimensions to {self.mrl_dimensions}")
+            else:
+                self.model = SentenceTransformer(model_name, device=self.device)
             logger.info(f"Model loaded in {time.time() - start_load:.2f}s")
             
             # Enable half precision if requested
@@ -105,9 +109,9 @@ class EmbeddingGenerator:
             )
         
         # Apply MRL compression if requested
-        if self.use_mrl and batch_embeddings.shape[1] > self.mrl_dimensions:
-            batch_embeddings = batch_embeddings[:, :self.mrl_dimensions]
-            logger.info(f"Applied MRL, reduced dimensions to {self.mrl_dimensions}")
+        # if self.use_mrl and batch_embeddings.shape[1] > self.mrl_dimensions:
+        #     batch_embeddings = batch_embeddings[:, :self.mrl_dimensions]
+        #     logger.info(f"Applied MRL, reduced dimensions to {self.mrl_dimensions}")
         
         # Save batch embeddings if requested
         if save:
