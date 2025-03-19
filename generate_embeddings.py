@@ -223,7 +223,7 @@ def main():
         profiles = enhancer.generate_enhanced_profiles(
             all_data,
             ids=all_ids,
-            batch_size=min(args.batch_size, 16),
+            batch_size=min(args.batch_size, 1024),
             use_cache=True
         )
         
@@ -249,40 +249,122 @@ def main():
                 batch_idx=i
             )
         
+        # # Combine raw and enhanced embeddings
+        # logger.info("\nCombining raw and enhanced embeddings...")
+        
+        # # Get list of embedding files
+        # raw_files = sorted([f for f in os.listdir(raw_embeddings_dir) if f.endswith('.npy')])
+        # enhanced_files = sorted([f for f in os.listdir(enhanced_embeddings_dir) if f.endswith('.npy')])
+        
+        # for raw_file, enhanced_file in zip(raw_files, enhanced_files):
+        #     # Extract indices
+        #     parts = raw_file.replace('embeddings_', '').replace('.npy', '').split('_')
+        #     start_idx, end_idx = int(parts[0]), int(parts[1])
+            
+        #     # Load embeddings
+        #     raw_emb = np.load(os.path.join(raw_embeddings_dir, raw_file))
+        #     enhanced_emb = np.load(os.path.join(enhanced_embeddings_dir, enhanced_file))
+            
+        #     # Combine
+        #     combined = combine_embeddings(
+        #         raw_emb,
+        #         enhanced_emb,
+        #         method=args.fusion_method,
+        #         raw_weight=args.raw_weight
+        #     )
+            
+        #     # Save combined embeddings
+        #     combined_file = os.path.join(combined_embeddings_dir, f"embeddings_{start_idx}_{end_idx}.npy")
+        #     np.save(combined_file, combined)
+            
+        #     # Copy IDs file
+        #     ids_file = os.path.join(raw_embeddings_dir, f"ids_{start_idx}_{end_idx}.json")
+        #     if os.path.exists(ids_file):
+        #         import shutil
+        #         shutil.copy(ids_file, os.path.join(combined_embeddings_dir, f"ids_{start_idx}_{end_idx}.json"))
+        
+
         # Combine raw and enhanced embeddings
         logger.info("\nCombining raw and enhanced embeddings...")
-        
+
         # Get list of embedding files
         raw_files = sorted([f for f in os.listdir(raw_embeddings_dir) if f.endswith('.npy')])
-        enhanced_files = sorted([f for f in os.listdir(enhanced_embeddings_dir) if f.endswith('.npy')])
-        
-        for raw_file, enhanced_file in zip(raw_files, enhanced_files):
-            # Extract indices
-            parts = raw_file.replace('embeddings_', '').replace('.npy', '').split('_')
-            start_idx, end_idx = int(parts[0]), int(parts[1])
+
+        # Process each raw embedding file
+        for raw_file in raw_files:
+            # Extract indices from raw file
+            raw_parts = raw_file.replace('embeddings_', '').replace('.npy', '').split('_')
+            raw_start_idx, raw_end_idx = int(raw_parts[0]), int(raw_parts[1])
             
-            # Load embeddings
+            # Load raw embeddings
             raw_emb = np.load(os.path.join(raw_embeddings_dir, raw_file))
-            enhanced_emb = np.load(os.path.join(enhanced_embeddings_dir, enhanced_file))
             
-            # Combine
-            combined = combine_embeddings(
-                raw_emb,
-                enhanced_emb,
-                method=args.fusion_method,
-                raw_weight=args.raw_weight
-            )
+            # Find all enhanced files that cover this range
+            enhanced_chunks = []
+            enhanced_ranges = []
             
-            # Save combined embeddings
-            combined_file = os.path.join(combined_embeddings_dir, f"embeddings_{start_idx}_{end_idx}.npy")
-            np.save(combined_file, combined)
+            # Get all enhanced files whose ranges overlap with the current raw file
+            enhanced_files = sorted([f for f in os.listdir(enhanced_embeddings_dir) if f.endswith('.npy')])
             
-            # Copy IDs file
-            ids_file = os.path.join(raw_embeddings_dir, f"ids_{start_idx}_{end_idx}.json")
-            if os.path.exists(ids_file):
-                import shutil
-                shutil.copy(ids_file, os.path.join(combined_embeddings_dir, f"ids_{start_idx}_{end_idx}.json"))
-        
+            for enhanced_file in enhanced_files:
+                # Extract indices
+                enh_parts = enhanced_file.replace('embeddings_', '').replace('.npy', '').split('_')
+                enh_start_idx, enh_end_idx = int(enh_parts[0]), int(enh_parts[1])
+                
+                # Check if this enhanced file overlaps with our raw file range
+                if (enh_start_idx >= raw_start_idx and enh_start_idx < raw_end_idx) or \
+                (enh_end_idx > raw_start_idx and enh_end_idx <= raw_end_idx) or \
+                (enh_start_idx <= raw_start_idx and enh_end_idx >= raw_end_idx):
+                    
+                    # Load enhanced embeddings
+                    enhanced_emb = np.load(os.path.join(enhanced_embeddings_dir, enhanced_file))
+                    enhanced_chunks.append(enhanced_emb)
+                    enhanced_ranges.append((enh_start_idx, enh_end_idx))
+                    logger.info(f"  Found matching enhanced file: {enhanced_file}")
+            
+            # Combine all enhanced chunks that match this raw file
+            if enhanced_chunks:
+                # We need to reconstruct the enhanced embeddings in the same order as the raw
+                enhanced_emb = np.zeros((raw_end_idx - raw_start_idx, enhanced_chunks[0].shape[1]), 
+                                    dtype=enhanced_chunks[0].dtype)
+                
+                # Fill in the enhanced embeddings
+                for chunk, (start, end) in zip(enhanced_chunks, enhanced_ranges):
+                    # Calculate offset relative to raw_start_idx
+                    rel_start = max(0, start - raw_start_idx)
+                    rel_end = min(raw_end_idx - raw_start_idx, end - raw_start_idx)
+                    
+                    # Calculate which part of the chunk to use
+                    chunk_start = max(0, raw_start_idx - start)
+                    chunk_end = chunk_start + (rel_end - rel_start)
+                    
+                    # Copy the relevant part of the chunk
+                    enhanced_emb[rel_start:rel_end] = chunk[chunk_start:chunk_end]
+                
+                # Now we have aligned enhanced embeddings, we can combine them
+                combined = combine_embeddings(
+                    raw_emb,
+                    enhanced_emb,
+                    method=args.fusion_method,
+                    raw_weight=args.raw_weight
+                )
+                
+                # Save combined embeddings
+                combined_file = os.path.join(combined_embeddings_dir, f"embeddings_{raw_start_idx}_{raw_end_idx}.npy")
+                np.save(combined_file, combined)
+                
+                # Copy IDs file
+                ids_file = os.path.join(raw_embeddings_dir, f"ids_{raw_start_idx}_{raw_end_idx}.json")
+                if os.path.exists(ids_file):
+                    import shutil
+                    shutil.copy(ids_file, os.path.join(combined_embeddings_dir, f"ids_{raw_start_idx}_{raw_end_idx}.json"))
+                    
+                logger.info(f"  Combined and saved: {combined_file}")
+            else:
+                logger.warning(f"No matching enhanced embeddings found for {raw_file}")
+
+
+
         # Update checkpoint
         checkpoint["enhanced_processed"] = True
         with open(checkpoint_file, 'w') as f:
