@@ -100,7 +100,7 @@ class EmbeddingGenerator:
         with torch.inference_mode():
             batch_embeddings = self.model.encode(
                 texts, 
-                batch_size=min(self.batch_size, 32),
+                batch_size=min(self.batch_size, 1024),
                 show_progress_bar=True
             )
         
